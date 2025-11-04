@@ -31,11 +31,21 @@
     .pnum.left{left:10px}.pnum.right{right:10px}
     .hint{color:var(--muted);font-size:14px}
   </style>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.min.js" crossorigin="anonymous"></script>
+  <!-- PDF.js via CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script>
+    // Defer viewer start until pdf.js is available
+    function startWhenPdfJsReady(){
+      if(typeof window.pdfjsLib === 'undefined'){ return void setTimeout(startWhenPdfJsReady, 150); }
+      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.worker.min.js';
+      pdfjsLib.GlobalWorkerOptions.isEvalSupported = false; // stricter CSP friendliness
+      startViewer();
+    }
+  </script>
 </head>
-<body>
+<body onload="startWhenPdfJsReady()">
   <div class="wrap">
-    <div class="viewer">
+    <div class="viewer" aria-label="PDF booklet viewer">
       <div class="toolbar">
         <div class="leftTools">
           <div class="title">PDF Booklet Preview <span class="badge">Cover on Right • Back on Left</span></div>
@@ -44,7 +54,7 @@
         </div>
         <div class="controls">
           <button id="prev">⟵ Prev</button>
-          <div id="info" class="hint">Loading viewer...</div>
+          <div id="info" class="hint">Loading viewer…</div>
           <div id="debug" class="hint" style="font-size:12px"></div>
           <button id="next">Next ⟶</button>
         </div>
@@ -52,92 +62,103 @@
 
       <div class="stage">
         <div class="gutter"></div>
-        <div id="left" class="slot"><div class="slotInner"><div class="placeholder">—</div></div><div class="pnum left"></div></div>
-        <div id="right" class="slot"><div class="slotInner"><div class="placeholder">—</div></div><div class="pnum right"></div></div>
+        <div id="left" class="slot" aria-label="Left page">
+          <div class="slotInner"><div class="placeholder">—</div></div>
+          <div class="pnum left"></div>
+        </div>
+        <div id="right" class="slot" aria-label="Right page">
+          <div class="slotInner"><div class="placeholder">—</div></div>
+          <div class="pnum right"></div>
+        </div>
       </div>
-      <div class="hint">Tip: Use ◀ ▶ arrow keys. Cover on right, back on left.</div>
+
+      <div class="hint">Tip: Use ◀ ▶ arrow keys. Cover on the <b>right</b>, back on the <b>left</b>.</div>
     </div>
   </div>
 
-  <script>
-    // Wait until pdf.js is fully loaded
-    function initWhenReady(){
-      if(typeof pdfjsLib === 'undefined'){ 
-        setTimeout(initWhenReady, 200); 
-        return; 
-      }
-      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.worker.min.js';
-      pdfjsLib.GlobalWorkerOptions.isEvalSupported = false;
-      startViewer();
+<script>
+  // === Preload via your Apps Script proxy (fetch → arrayBuffer avoids XHR/CORS quirks) ===
+  const PRELOAD_URL = 'https://script.google.com/macros/s/AKfycbz7DNd-xoRqcEPpL-YMk03opF_BHinZxtdPKeDY2EtYSc_VsByj9N9JAZPi7bkwHnQLIg/exec?id=1KyMl-C7EUN91OW5eeDbILWn10_uDt1Ol';
+
+  function startViewer(){
+    const info = document.getElementById('info');
+    const debug = document.getElementById('debug');
+    const leftSlot = document.getElementById('left');
+    const rightSlot = document.getElementById('right');
+    const prevBtn = document.getElementById('prev');
+    const nextBtn = document.getElementById('next');
+
+    let pdfDoc = null, spreads = [], idx = 0;
+
+    function makeSpreads(n){
+      if(n<=0) return [];
+      if(n===1) return [[null,1]];
+      const s=[[null,1]]; // cover on right
+      for(let p=2;p<=n-2;p+=2) s.push([p,p+1]);
+      s.push([n,null]);   // back cover on left
+      return s;
     }
 
-    function startViewer(){
-      const PRELOAD_URL = 'https://script.google.com/macros/s/AKfycbz7DNd-xoRqcEPpL-YMk03opF_BHinZxtdPKeDY2EtYSc_VsByj9N9JAZPi7bkwHnQLIg/exec?id=1KyMl-C7EUN91OW5eeDbILWn10_uDt1Ol';
-      const info = document.getElementById('info');
-      const debug = document.getElementById('debug');
-      const left = document.getElementById('left');
-      const right = document.getElementById('right');
-      const prevBtn = document.getElementById('prev');
-      const nextBtn = document.getElementById('next');
-      let pdfDoc=null, spreads=[], idx=0;
-
-      const makeSpreads = n=>{
-        if(n<=0) return [];
-        if(n===1) return [[null,1]];
-        const s=[[null,1]];
-        for(let p=2;p<=n-2;p+=2) s.push([p,p+1]);
-        s.push([n,null]);
-        return s;
-      };
-
-      async function renderPage(num,slot){
-        const page=await pdfDoc.getPage(num);
-        const rect=slot.getBoundingClientRect();
-        const viewport=page.getViewport({scale:1});
-        const scale=(rect.width/viewport.width)*(window.devicePixelRatio||1);
-        const vp=page.getViewport({scale});
-        const canvas=document.createElement('canvas');
-        canvas.className='render';
-        canvas.width=vp.width; canvas.height=vp.height;
-        const ctx=canvas.getContext('2d');
-        slot.querySelector('.slotInner').innerHTML='';
-        slot.querySelector('.slotInner').appendChild(canvas);
-        await page.render({canvasContext:ctx,viewport:vp}).promise;
-      }
-
-      async function renderSpread(){
-        const [L,R]=spreads[idx];
-        info.textContent=`Spread ${idx+1} of ${spreads.length}`;
-        prevBtn.disabled=idx===0; nextBtn.disabled=idx===spreads.length-1;
-        await Promise.all([
-          L?renderPage(L,left):Promise.resolve(),
-          R?renderPage(R,right):Promise.resolve()
-        ]);
-      }
-
-      async function loadPdf(url){
-        try{
-          debug.textContent='Fetching '+url;
-          const task=pdfjsLib.getDocument({url,isEvalSupported:false});
-          pdfDoc=await task.promise;
-          spreads=makeSpreads(pdfDoc.numPages);
-          idx=0;
-          await renderSpread();
-          debug.textContent=`Loaded ${pdfDoc.numPages} pages.`;
-        }catch(err){
-          info.textContent='Failed to load PDF';
-          debug.innerHTML='Error: '+err.message+'<br><a href="'+url+'" target="_blank">Open in new tab</a>';
-        }
-      }
-
-      prevBtn.onclick=()=>{ if(idx>0){idx--;renderSpread();}};
-      nextBtn.onclick=()=>{ if(idx<spreads.length-1){idx++;renderSpread();}};
-      window.onkeydown=e=>{if(e.key==='ArrowLeft')prevBtn.click();if(e.key==='ArrowRight')nextBtn.click();};
-
-      loadPdf(PRELOAD_URL);
+    async function renderPage(pageNum, slot){
+      // Clear slot
+      slot.querySelector('.slotInner').innerHTML = '';
+      const page = await pdfDoc.getPage(pageNum);
+      const rect = slot.getBoundingClientRect();
+      const baseVp = page.getViewport({ scale: 1 });
+      const scale = (rect.width / baseVp.width) * Math.min(window.devicePixelRatio||1, 2);
+      const vp = page.getViewport({ scale });
+      const canvas = document.createElement('canvas');
+      canvas.className = 'render';
+      canvas.width = Math.floor(vp.width);
+      canvas.height = Math.floor(vp.height);
+      canvas.style.width = Math.floor(vp.width / (window.devicePixelRatio||1)) + 'px';
+      canvas.style.height = Math.floor(vp.height / (window.devicePixelRatio||1)) + 'px';
+      slot.querySelector('.slotInner').appendChild(canvas);
+      await page.render({ canvasContext: canvas.getContext('2d', { alpha:false }), viewport: vp }).promise;
     }
 
-    initWhenReady();
-  </script>
+    async function renderSpread(){
+      const [L,R] = spreads[idx];
+      info.textContent = `Spread ${idx+1} of ${spreads.length}`;
+      prevBtn.disabled = idx===0; nextBtn.disabled = idx===spreads.length-1;
+      await Promise.all([
+        L ? renderPage(L, leftSlot)  : (leftSlot.querySelector('.slotInner').innerHTML = '', Promise.resolve()),
+        R ? renderPage(R, rightSlot) : (rightSlot.querySelector('.slotInner').innerHTML = '', Promise.resolve()),
+      ]);
+    }
+
+    async function loadPdfFromUrl(url){
+      debug.textContent = 'Fetching: ' + url;
+      try{
+        const resp = await fetch(url, { cache: 'no-store' });
+        if(!resp.ok) throw new Error('HTTP ' + resp.status + ' ' + resp.statusText);
+        const buf = await resp.arrayBuffer();
+        const task = pdfjsLib.getDocument({ data: buf, isEvalSupported: false });
+        pdfDoc = await task.promise;
+        spreads = makeSpreads(pdfDoc.numPages);
+        idx = 0;
+        await renderSpread();
+        debug.textContent = `Loaded ${pdfDoc.numPages} pages.`;
+      } catch(err){
+        info.textContent = 'Failed to load PDF';
+        debug.innerHTML = 'Error: ' + (err && err.message ? err.message : err) + `<br><a href="${url}" target="_blank" rel="noopener">Open source URL</a>`;
+        console.error(err);
+      }
+    }
+
+    // Nav
+    prevBtn.addEventListener('click', ()=>{ if(idx>0){ idx--; renderSpread(); } });
+    nextBtn.addEventListener('click', ()=>{ if(idx<spreads.length-1){ idx++; renderSpread(); } });
+    window.addEventListener('keydown', (e)=>{ if(e.key==='ArrowLeft') prevBtn.click(); if(e.key==='ArrowRight') nextBtn.click(); });
+    rightSlot.addEventListener('click', ()=> nextBtn.click());
+    leftSlot.addEventListener('click', ()=> prevBtn.click());
+
+    // Resize
+    let rTO; window.addEventListener('resize', ()=>{ clearTimeout(rTO); rTO = setTimeout(()=>{ if(pdfDoc) renderSpread(); }, 120); });
+
+    // Kick off
+    loadPdfFromUrl(PRELOAD_URL);
+  }
+</script>
 </body>
 </html>
