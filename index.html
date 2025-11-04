@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PDF Booklet Viewer (Cover Right, Back Left)</title>
+  <style>
+    :root { --bg:#f4f5f7; --ink:#111827; --muted:#6b7280; --accent:#2563eb; --shadow:rgba(0,0,0,.14); --page-bg:#fff; }
+    *{box-sizing:border-box}
+    body{margin:0;background:radial-gradient(1200px 800px at 50% -10%,#e8ebf0 0%,var(--bg) 40%,#e5e7eb 100%);font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial}
+    .wrap{min-height:100dvh;display:grid;place-items:center;padding:24px}
+    .viewer{width:min(1200px,96vw);display:grid;grid-template-rows:auto 1fr auto;gap:14px}
+    .toolbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between}
+    .leftTools{display:flex;gap:10px;align-items:center}
+    .title{font-weight:700}
+    .badge{font-size:12px;padding:4px 8px;border-radius:999px;background:#e5edff;color:#1e3a8a;font-weight:700}
+    .controls{display:flex;gap:8px;align-items:center}
+    button{border:1px solid #d1d5db;background:#fff;padding:10px 14px;border-radius:10px;cursor:pointer;font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+    button:hover{box-shadow:0 8px 20px rgba(0,0,0,.08)}
+    button:disabled{opacity:.45;cursor:not-allowed}
+    input[type="file"]{display:none}
+    label.fileBtn{border:1px dashed #9ca3af;background:#fff;padding:10px 14px;border-radius:10px;cursor:pointer;color:#374151}
+    .stage{position:relative;width:100%;aspect-ratio:16/10;display:grid;grid-template-columns:1fr 1fr;gap:18px;padding:clamp(8px,1.8vw,24px);background:#eef2f7;border-radius:16px;box-shadow:inset 0 0 0 1px #e5e7eb}
+    .gutter{position:absolute;left:50%;top:0;bottom:0;width:2px;background:linear-gradient(to bottom,transparent,#d6dae0,transparent);transform:translateX(-1px);pointer-events:none;opacity:.7}
+    .slot{position:relative;overflow:hidden;border-radius:12px;background:var(--page-bg);box-shadow:0 14px 30px var(--shadow),0 2px 5px rgba(0,0,0,.08);display:grid;place-items:center}
+    .slot::before{content:"";display:block;width:100%;padding-top:calc(100%*(11/8.5))}
+    .slotInner{position:absolute;inset:0;display:grid;place-items:center}
+    canvas.render{max-width:100%;max-height:100%;width:100%;height:100%;object-fit:contain}
+    .placeholder{font-weight:800;font-size:clamp(28px,5.5vw,64px);color:#d1d5db;user-select:none}
+    .pnum{position:absolute;bottom:10px;font-size:12px;letter-spacing:.4px;color:#6b7280;background:rgba(255,255,255,.7);padding:3px 8px;border-radius:999px;box-shadow:0 1px 5px rgba(0,0,0,.08)}
+    .pnum.left{left:10px}.pnum.right{right:10px}
+    .hint{color:var(--muted);font-size:14px}
+  </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.min.js" crossorigin="anonymous"></script>
+</head>
+<body>
+  <div class="wrap">
+    <div class="viewer">
+      <div class="toolbar">
+        <div class="leftTools">
+          <div class="title">PDF Booklet Preview <span class="badge">Cover on Right • Back on Left</span></div>
+          <label class="fileBtn" for="pdfFile">Upload PDF</label>
+          <input id="pdfFile" type="file" accept="application/pdf" />
+        </div>
+        <div class="controls">
+          <button id="prev">⟵ Prev</button>
+          <div id="info" class="hint">Loading viewer...</div>
+          <div id="debug" class="hint" style="font-size:12px"></div>
+          <button id="next">Next ⟶</button>
+        </div>
+      </div>
+
+      <div class="stage">
+        <div class="gutter"></div>
+        <div id="left" class="slot"><div class="slotInner"><div class="placeholder">—</div></div><div class="pnum left"></div></div>
+        <div id="right" class="slot"><div class="slotInner"><div class="placeholder">—</div></div><div class="pnum right"></div></div>
+      </div>
+      <div class="hint">Tip: Use ◀ ▶ arrow keys. Cover on right, back on left.</div>
+    </div>
+  </div>
+
+  <script>
+    // Wait until pdf.js is fully loaded
+    function initWhenReady(){
+      if(typeof pdfjsLib === 'undefined'){ 
+        setTimeout(initWhenReady, 200); 
+        return; 
+      }
+      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.worker.min.js';
+      pdfjsLib.GlobalWorkerOptions.isEvalSupported = false;
+      startViewer();
+    }
+
+    function startViewer(){
+      const PRELOAD_URL = 'https://script.google.com/macros/s/AKfycbz7DNd-xoRqcEPpL-YMk03opF_BHinZxtdPKeDY2EtYSc_VsByj9N9JAZPi7bkwHnQLIg/exec?id=1KyMl-C7EUN91OW5eeDbILWn10_uDt1Ol';
+      const info = document.getElementById('info');
+      const debug = document.getElementById('debug');
+      const left = document.getElementById('left');
+      const right = document.getElementById('right');
+      const prevBtn = document.getElementById('prev');
+      const nextBtn = document.getElementById('next');
+      let pdfDoc=null, spreads=[], idx=0;
+
+      const makeSpreads = n=>{
+        if(n<=0) return [];
+        if(n===1) return [[null,1]];
+        const s=[[null,1]];
+        for(let p=2;p<=n-2;p+=2) s.push([p,p+1]);
+        s.push([n,null]);
+        return s;
+      };
+
+      async function renderPage(num,slot){
+        const page=await pdfDoc.getPage(num);
+        const rect=slot.getBoundingClientRect();
+        const viewport=page.getViewport({scale:1});
+        const scale=(rect.width/viewport.width)*(window.devicePixelRatio||1);
+        const vp=page.getViewport({scale});
+        const canvas=document.createElement('canvas');
+        canvas.className='render';
+        canvas.width=vp.width; canvas.height=vp.height;
+        const ctx=canvas.getContext('2d');
+        slot.querySelector('.slotInner').innerHTML='';
+        slot.querySelector('.slotInner').appendChild(canvas);
+        await page.render({canvasContext:ctx,viewport:vp}).promise;
+      }
+
+      async function renderSpread(){
+        const [L,R]=spreads[idx];
+        info.textContent=`Spread ${idx+1} of ${spreads.length}`;
+        prevBtn.disabled=idx===0; nextBtn.disabled=idx===spreads.length-1;
+        await Promise.all([
+          L?renderPage(L,left):Promise.resolve(),
+          R?renderPage(R,right):Promise.resolve()
+        ]);
+      }
+
+      async function loadPdf(url){
+        try{
+          debug.textContent='Fetching '+url;
+          const task=pdfjsLib.getDocument({url,isEvalSupported:false});
+          pdfDoc=await task.promise;
+          spreads=makeSpreads(pdfDoc.numPages);
+          idx=0;
+          await renderSpread();
+          debug.textContent=`Loaded ${pdfDoc.numPages} pages.`;
+        }catch(err){
+          info.textContent='Failed to load PDF';
+          debug.innerHTML='Error: '+err.message+'<br><a href="'+url+'" target="_blank">Open in new tab</a>';
+        }
+      }
+
+      prevBtn.onclick=()=>{ if(idx>0){idx--;renderSpread();}};
+      nextBtn.onclick=()=>{ if(idx<spreads.length-1){idx++;renderSpread();}};
+      window.onkeydown=e=>{if(e.key==='ArrowLeft')prevBtn.click();if(e.key==='ArrowRight')nextBtn.click();};
+
+      loadPdf(PRELOAD_URL);
+    }
+
+    initWhenReady();
+  </script>
+</body>
+</html>
